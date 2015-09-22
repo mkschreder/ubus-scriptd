@@ -91,6 +91,112 @@ static int rpc_shell_script(struct ubus_context *ctx, struct ubus_object *obj,
 	return exit_code;
 }
 
+static struct ubus_method *parse_methods_json(const char *str, int *mcount){
+	struct blob_buf buf; 
+	blob_buf_init(&buf,0); 
+	if(!blobmsg_add_json_from_string(&buf, str)) return 0;  
+	
+	struct blob_attr *attr; 
+	struct blob_attr *head = blob_data(buf.head); 
+	int len = blob_len(buf.head); 
+	int nmethods = 0; 
+
+	__blob_for_each_attr(attr, head, len){
+		nmethods++; 
+	}
+
+	struct ubus_method *methods = calloc(nmethods, sizeof(struct ubus_method)); 
+	
+	nmethods = 0; 
+	head = blob_data(buf.head); 
+	len = blob_len(buf.head); 
+	
+	__blob_for_each_attr(attr, head, len){
+		struct blobmsg_hdr *hdr = blob_data(attr); 
+		printf(" - found %s\n", hdr->name); 
+		switch(blob_id(attr)){
+			case BLOBMSG_TYPE_TABLE: 
+			case BLOBMSG_TYPE_ARRAY: {
+				struct blob_attr *a; 
+				int l = blobmsg_data_len(attr); 
+				int nparams = 0; 
+					
+				__blob_for_each_attr(a, blobmsg_data(attr), l){
+					nparams++; 
+				}
+					
+				struct blobmsg_policy *policy = calloc(nparams, sizeof(struct blobmsg_policy)); 
+
+				l = blob_len(attr); 
+				nparams = 0; 
+				__blob_for_each_attr(a, blobmsg_data(attr), l){
+					if(blob_id(a) == BLOBMSG_TYPE_STRING){
+						const char *type_string = "string"; 
+						printf("blobattr: %s %s %s\n", blobmsg_name(attr), blobmsg_name(a), (char*)blobmsg_data(a)); 
+						if(strlen(blobmsg_name(a)) > 0){
+							policy[nparams].name = strdup(blobmsg_name(a)); 
+							type_string = blobmsg_data(a); 
+						} else {
+							policy[nparams].name = strdup(blobmsg_data(a));
+						}
+						if(strcmp(type_string, "string") == 0)
+							policy[nparams].type = BLOBMSG_TYPE_STRING; 
+						else if(strcmp(type_string, "bool") == 0)
+							policy[nparams].type = BLOBMSG_TYPE_INT8; 
+						else if(strcmp(type_string, "int") == 0 || strcmp(type_string, "int32") == 0)
+							policy[nparams].type = BLOBMSG_TYPE_INT32; 
+						else 
+							policy[nparams].type = BLOBMSG_TYPE_STRING; 
+						nparams++;
+					} 
+				}
+				printf("%s: method %s with %d params\n", __FUNCTION__, hdr->name, nparams); 
+				methods[nmethods].name = strdup((char*)hdr->name); 
+				methods[nmethods].policy = policy; 
+				methods[nmethods].n_policy = nparams; 
+				methods[nmethods].handler = rpc_shell_script; 
+				nmethods++;
+			} break; 
+		}
+	}
+
+	*mcount = nmethods; 
+	return methods; 
+}
+
+static struct ubus_method* parse_methods_comma_list(const char *str, int *mcount){
+	char mstr[512]; 
+	strncpy(mstr, str, sizeof(mstr)); 
+	const char *mnames[64] = {0}; 
+	int nmethods = 1; 
+	mnames[0] = mstr; 
+	int len = strlen(mstr); 
+	for(int c = 0; c < len; c++) { 
+		if(mstr[c] == ',') {
+			mstr[c] = 0; 
+			mnames[nmethods] = mstr + c + 1; 
+			nmethods++; 
+			if(nmethods == sizeof(mnames)/sizeof(mnames[0]) - 1){
+				printf("Error: maximum number of methods!\n"); 
+				break; 
+			}
+		} else if(mstr[c] == '\n'){
+			break; 
+		}
+	}
+	
+	struct ubus_method *methods = calloc(nmethods, sizeof(struct ubus_method));
+
+	for(size_t c = 0; c < nmethods; c++){
+		printf(" - registering %s\n", mnames[c]); 
+		methods[c].name = strdup(mnames[c]); 
+		methods[c].handler = rpc_shell_script;  
+	}
+
+	*mcount = nmethods; 
+
+	return methods; 
+}
 
 int _load_ubus_plugins(struct ubus_context *ctx, const char *path, const char *base_path){
 	int rv = 0; 
@@ -115,7 +221,7 @@ int _load_ubus_plugins(struct ubus_context *ctx, const char *path, const char *b
 			_load_ubus_plugins(ctx, fname, base_path);  
 		} else  if(ent->d_type == DT_REG || ent->d_type == DT_LNK){
 			struct ubus_method *methods = 0; 
-			size_t nmethods = 0; 
+			int nmethods = 0; 
 			if(strcmp(ent->d_name + strlen(ent->d_name) - 3, ".so") == 0){
 				// try to load the so and see if it is a valid plugin
 				void *dp = dlopen(fname, RTLD_NOW); 
@@ -125,38 +231,20 @@ int _load_ubus_plugins(struct ubus_context *ctx, const char *path, const char *b
 					continue; 
 				}
 			} else {
-				char mstr[255]; 
-				// check if the file is executable 
-				strncpy(mstr, run_command("%s .methods", &exit_code, fname), sizeof(mstr)); 
+				const char *mstr = run_command("%s .methods", &exit_code, fname); 
 				
 				// extract methods into an array 
-				nmethods = 1; 
-				const char *mnames[64] = {0}; 
-				mnames[0] = mstr; 
-				int len = strlen(mstr); 
-				for(int c = 0; c < len; c++) { 
-					if(mstr[c] == ',') {
-						mstr[c] = 0; 
-						mnames[nmethods] = mstr + c + 1; 
-						nmethods++; 
-						if(nmethods == sizeof(mnames)/sizeof(mnames[0]) - 1){
-							printf("Error: maximum number of methods!\n"); 
-							break; 
-						}
-					} else if(mstr[c] == '\n'){
-						break; 
-					}
+				if(!(methods = parse_methods_json(mstr, &nmethods))){
+					printf("%s: unable to parse json, tryging comma list...\n", __FUNCTION__); 
+					methods = parse_methods_comma_list(mstr, &nmethods); 
 				}
 				
+				if(!methods) {
+					fprintf(stderr, "%s: error loading methods from %s\n", __FUNCTION__, fname); 
+					continue; 
+				}
+
 				printf(" - %d methods for %s\n", nmethods, fname); 
-				
-				methods = calloc(nmethods, sizeof(struct ubus_method));
-				
-				for(size_t c = 0; c < nmethods; c++){
-					printf(" - registering %s\n", mnames[c]); 
-					methods[c].name = strdup(mnames[c]); 
-					methods[c].handler = rpc_shell_script;  
-				}
 			}
 
 			if(!methods) continue; 

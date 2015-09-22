@@ -33,3 +33,19 @@ they will come up as ubus objects.
 
 You can now call these objects just like any other ubus object. 
 
+# paramter specification
+
+The .methods metamethod can either return a comma separated string of methods, or it can return a json object that looks like this: 
+
+	{ 
+		"method": { "param": "param_type" }
+		..
+	}
+
+This allows you to set let ubus know what type the paramteres should have. Valid types are: 
+
+	bool
+	int
+	string
+
+
