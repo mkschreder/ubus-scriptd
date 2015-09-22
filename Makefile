@@ -1,5 +1,5 @@
 BUILD_DIR=build_dir
-TARGET=ubus-etc-daemon
+TARGET=etc-ubus-daemon
 SOURCE=src/main.c
 OBJECTS=$(patsubst %.c,%.o,$(SOURCE))
 CFLAGS+=-Wall -Werror -std=c99
