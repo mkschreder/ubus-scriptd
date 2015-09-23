@@ -17,15 +17,28 @@
 #include <memory.h>
 #include <libubox/blobmsg_json.h>
 #include <libubox/avl-cmp.h>
+#include <libubox/list.h>
 #include <libubus.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <stdarg.h>
 #include <sys/stat.h>
 
-#define UBUS_ROOT "/etc/ubus"
+#define UBUS_ROOT "/usr/lib/ubus"
 
 static struct blob_buf buf; 
+
+struct script_object {
+	struct ubus_object *ubus_object; 
+	struct ubus_context *ubus_ctx; 
+	struct list_head list; 
+	uint8_t free_ubus_object; 
+}; 
+
+struct app {
+	struct ubus_context *ctx; 
+	struct list_head scripts;  
+}; 
 
 void on_ubus_connection_lost(struct ubus_context *ctx){
 	printf("ubus connection lost!\n"); 
@@ -198,9 +211,109 @@ static struct ubus_method* parse_methods_comma_list(const char *str, int *mcount
 	return methods; 
 }
 
-int _load_ubus_plugins(struct ubus_context *ctx, const char *path, const char *base_path){
+void script_object_init(struct script_object *self){
+	INIT_LIST_HEAD(&self->list); 
+	self->ubus_object = 0; 
+	self->free_ubus_object = 0; 
+	self->ubus_ctx = 0; 
+}
+
+int script_object_load(struct script_object *self, const char *path){
+	struct ubus_method *methods = 0; 
+	int nmethods = 0;
+	if(strcmp(path + strlen(path) - 3, ".so") == 0){
+		// try to load the so and see if it is a valid plugin
+		void *dp = dlopen(path, RTLD_NOW); 
+		methods = dlsym(dp, "ubus_methods"); 
+		if(!methods){
+			fprintf(stderr, "error: could not find ubus_methods symbol in %s\n", path); 
+			return -EINVAL;  
+		}
+	} else {
+		int exit_code = 0; 
+		const char *mstr = run_command("%s .methods", &exit_code, path); 
+		
+		// extract methods into an array 
+		if(!(methods = parse_methods_json(mstr, &nmethods))){
+			printf("%s: unable to parse json, tryging comma list...\n", __FUNCTION__); 
+			methods = parse_methods_comma_list(mstr, &nmethods); 
+		}
+		
+		if(!methods) {
+			fprintf(stderr, "%s: error loading methods from %s\n", __FUNCTION__, path); 
+			return -EINVAL;  
+		}
+
+		printf(" - %d methods for %s\n", nmethods, path); 
+	}
+	
+	struct ubus_object *obj = calloc(1, sizeof(struct ubus_object)); 
+	struct ubus_object_type *obj_type = calloc(1, sizeof(struct ubus_object_type)); 
+	
+	obj_type->name = 0; 
+	obj_type->id = 0; 
+	obj_type->n_methods = nmethods; 
+	obj_type->methods = methods;
+	
+	obj->name = 0;
+	obj->type = obj_type;
+	obj->methods = methods;
+	obj->n_methods = nmethods; 
+	
+	self->ubus_object = obj; 
+	self->free_ubus_object = 1; 
+
+	return 0; 
+}
+
+void script_object_destroy(struct script_object *self){
+	if(!self->free_ubus_object) return; 
+	struct ubus_object *obj = self->ubus_object;
+	if(self->ubus_ctx) ubus_remove_object(self->ubus_ctx, self->ubus_object); 	
+	if(obj->name) free((char*)obj->name); 
+	if(obj->type->name) free((char*)obj->type->name); 
+	/*if(obj->methods){
+		for(int c = 0; c < obj->n_methods; c++){
+			const struct ubus_method *m = &obj->methods[c];
+			if(m->name) free(m->name); 
+			for(int j = 0; j < m->n_policy; j++){
+				const struct ubus_policy *p = &m->policy[j]; 
+				if(p->name) free((char*)p->name);  
+			}
+			free(m->policy); 
+		}
+		free(obj->methods); 
+	}*/
+	free(self->ubus_object); 
+}
+
+int script_object_register_on_ubus(struct script_object *self, const char *name, struct ubus_context *ctx){
+	if(!self->ubus_object) return -EINVAL;
+
+	char obj_type_name[64]; 
+	
+	strncpy(obj_type_name, name + 1, sizeof(obj_type_name)); 
+	for(size_t c = 0; c < strlen(name); c++) if(obj_type_name[c] == '/') obj_type_name[c] = '-'; 
+	
+	self->ubus_object->name = strdup(name); 
+	self->ubus_object->type->name = strdup(obj_type_name); 
+
+	printf("Registering ubus object %s (%s)\n", name, obj_type_name); 
+	
+	if(ubus_add_object(ctx, self->ubus_object) != 0){
+		//free(self->ubus_object->name); 
+		//free(self->ubus_object->type->name); 
+		self->ubus_object->name = self->ubus_object->type->name = 0; 
+		return -EIO; 
+	}
+
+	self->ubus_ctx = ctx; 
+
+	return 0; 
+}
+
+static int _load_ubus_plugins(struct app *self, const char *path, const char *base_path){
 	int rv = 0; 
-	int exit_code = 0; 
 	if(!base_path) base_path = path; 
 	DIR *dir = opendir(path); 
 	if(!dir){
@@ -218,85 +331,75 @@ int _load_ubus_plugins(struct ubus_context *ctx, const char *path, const char *b
 		printf("%s: found %s, type: %d\n", __FUNCTION__, fname, ent->d_type); 
 		
 		if(ent->d_type == DT_DIR) {
-			_load_ubus_plugins(ctx, fname, base_path);  
+			rv |= _load_ubus_plugins(self, fname, base_path);  
 		} else  if(ent->d_type == DT_REG || ent->d_type == DT_LNK){
-			struct ubus_method *methods = 0; 
-			int nmethods = 0; 
-			if(strcmp(ent->d_name + strlen(ent->d_name) - 3, ".so") == 0){
-				// try to load the so and see if it is a valid plugin
-				void *dp = dlopen(fname, RTLD_NOW); 
-				methods = dlsym(dp, "ubus_methods"); 
-				if(!methods){
-					fprintf(stderr, "error: could not find ubus_methods symbol in %s\n", fname); 
-					continue; 
+			struct script_object *script = calloc(1, sizeof(struct script_object)); 
+			script_object_init(script); 
+			script_object_load(script, fname); 
+			const char *basename = fname + strlen(fname); 
+			for(; basename != fname; basename--){
+				if(*(basename - 1) == '/'){
+					break;
 				}
-			} else {
-				const char *mstr = run_command("%s .methods", &exit_code, fname); 
-				
-				// extract methods into an array 
-				if(!(methods = parse_methods_json(mstr, &nmethods))){
-					printf("%s: unable to parse json, tryging comma list...\n", __FUNCTION__); 
-					methods = parse_methods_comma_list(mstr, &nmethods); 
-				}
-				
-				if(!methods) {
-					fprintf(stderr, "%s: error loading methods from %s\n", __FUNCTION__, fname); 
-					continue; 
-				}
-
-				printf(" - %d methods for %s\n", nmethods, fname); 
 			}
-
-			if(!methods) continue; 
-			
-			char *obj_name = strdup(fname + strlen(base_path)); 
-			char obj_type_name[64]; 
-			
-			strncpy(obj_type_name, obj_name, sizeof(obj_type_name)); 
-			for(size_t c = 0; c < strlen(obj_name); c++) if(obj_type_name[c] == '/') obj_type_name[c] = '-'; 
-			
-			printf("Registering ubus object %s (%s)\n", obj_name, obj_type_name); 
-			
-			struct ubus_object *obj = calloc(1, sizeof(struct ubus_object)); 
-			struct ubus_object_type *obj_type = calloc(1, sizeof(struct ubus_object_type)); 
-			
-			obj_type->name = strdup(obj_type_name); 
-			obj_type->id = 0; 
-			obj_type->n_methods = nmethods; 
-			obj_type->methods = methods;
-			
-			obj->name = obj_name;
-			obj->type = obj_type;
-			obj->methods = methods;
-			obj->n_methods = nmethods; 
-			
-			rv |= ubus_add_object(ctx, obj); 
+			if(script_object_register_on_ubus(script, basename, self->ctx) != 0){ 
+				script_object_destroy(script); 
+				free(script); 
+				rv |= -EINVAL;
+			}
 		}
 	}
 	return rv; 
 }
 
-int main(int argc, char **argv){
-	static struct ubus_context *ctx = 0; 
-	
+void app_init(struct app *self){
 	uloop_init(); 
+}
 
-	ctx = ubus_connect(NULL); 
-	if(!ctx) {
+int app_connect_to_ubus(struct app *self){
+	self->ctx = ubus_connect(NULL); 
+	if(!self->ctx) {
 		perror("could not connect to ubus!\n"); 
 		return -EIO; 
 	}
 
-	printf("connected as %x\n", ctx->local_id); 
+	printf("connected as %x\n", self->ctx->local_id); 
 	
-	ctx->connection_lost = on_ubus_connection_lost; 
-	
-	if(0 <= _load_ubus_plugins(ctx, UBUS_ROOT, NULL)){ 
-		ubus_add_uloop(ctx); 
-		uloop_run(); 
+	self->ctx->connection_lost = on_ubus_connection_lost; 	
+	return 0; 
+}
+
+int app_load_scripts(struct app *self, const char *root){
+	return _load_ubus_plugins(self, root, NULL); 
+}
+
+void app_run(struct app *self){
+	ubus_add_uloop(self->ctx); 
+	uloop_run(); 
+}
+
+void app_free(struct app *self){
+	ubus_free(self->ctx); 
+}
+
+int main(int argc, char **argv){
+	static struct app app; 
+
+	app_init(&app); 
+	if(app_connect_to_ubus(&app) != 0){
+		printf("failed to connect to ubus!\n"); 
+		return -1; 
 	}
 
-	ubus_free(ctx); 
+	if(app_load_scripts(&app, UBUS_ROOT) != 0){ 
+		printf("could not load ubus scripts\n"); 
+		app_free(&app); 
+		return -1; 
+	}
+	
+	app_run(&app); 
+	
+	app_free(&app); 
 
 	return 0; 
 }
