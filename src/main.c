@@ -106,10 +106,19 @@ static int rpc_shell_script(struct ubus_context *ctx, struct ubus_object *obj,
 
 static struct ubus_method *parse_methods_json(const char *str, int *mcount){
 	struct blob_buf buf; 
-	blob_buf_init(&buf,0); 
-	if(!blobmsg_add_json_from_string(&buf, str)) return 0;  
 	
-	struct blob_attr *attr; 
+	// BUG in blobbuf
+	memset(&buf, 0, sizeof(buf)); 
+
+	blob_buf_init(&buf,0); 
+	
+	printf("parsing %s\n", str); 
+	if(!blobmsg_add_json_from_string(&buf, str)) {
+		fprintf(stderr, "%s: could not parse json!\n", __FUNCTION__); 
+		return 0;  
+	}
+
+	struct blob_attr *attr = 0; 
 	struct blob_attr *head = blob_data(buf.head); 
 	int len = blob_len(buf.head); 
 	int nmethods = 0; 
@@ -117,6 +126,8 @@ static struct ubus_method *parse_methods_json(const char *str, int *mcount){
 	__blob_for_each_attr(attr, head, len){
 		nmethods++; 
 	}
+
+	printf("%s: allocating %d slots for methods\n", __FUNCTION__, nmethods); 
 
 	struct ubus_method *methods = calloc(nmethods, sizeof(struct ubus_method)); 
 	
@@ -130,7 +141,7 @@ static struct ubus_method *parse_methods_json(const char *str, int *mcount){
 		switch(blob_id(attr)){
 			case BLOBMSG_TYPE_TABLE: 
 			case BLOBMSG_TYPE_ARRAY: {
-				struct blob_attr *a; 
+				struct blob_attr *a = 0; 
 				int l = blobmsg_data_len(attr); 
 				int nparams = 0; 
 					
@@ -145,7 +156,7 @@ static struct ubus_method *parse_methods_json(const char *str, int *mcount){
 				__blob_for_each_attr(a, blobmsg_data(attr), l){
 					if(blob_id(a) == BLOBMSG_TYPE_STRING){
 						const char *type_string = "string"; 
-						printf("blobattr: %s %s %s\n", blobmsg_name(attr), blobmsg_name(a), (char*)blobmsg_data(a)); 
+						printf(" - blobattr: %s %s %s\n", blobmsg_name(attr), blobmsg_name(a), (char*)blobmsg_data(a)); 
 						if(strlen(blobmsg_name(a)) > 0){
 							policy[nparams].name = strdup(blobmsg_name(a)); 
 							type_string = blobmsg_data(a); 
@@ -172,6 +183,7 @@ static struct ubus_method *parse_methods_json(const char *str, int *mcount){
 			} break; 
 		}
 	}
+	blob_buf_free(&buf); 
 
 	*mcount = nmethods; 
 	return methods; 
