@@ -368,8 +368,8 @@ void app_init(struct app *self){
 	uloop_init(); 
 }
 
-int app_connect_to_ubus(struct app *self){
-	self->ctx = ubus_connect("/var/ubus"); 
+int app_connect_to_ubus(struct app *self, const char *path){
+	self->ctx = ubus_connect(path); 
 	if(!self->ctx) {
 		perror("could not connect to ubus!\n"); 
 		return -EIO; 
@@ -398,7 +398,7 @@ int main(int argc, char **argv){
 	static struct app app; 
 
 	app_init(&app); 
-	if(app_connect_to_ubus(&app) != 0){
+	if(app_connect_to_ubus(&app, NULL) != 0){
 		printf("failed to connect to ubus!\n"); 
 		return -1; 
 	}
