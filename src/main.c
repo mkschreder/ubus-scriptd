@@ -114,7 +114,7 @@ static struct ubus_method *parse_methods_json(const char *str, int *mcount){
 	
 	printf("parsing %s\n", str); 
 	if(!blobmsg_add_json_from_string(&buf, str)) {
-		fprintf(stderr, "%s: could not parse json!\n", __FUNCTION__); 
+		printf("%s: warning: could not parse json!\n", __FUNCTION__); 
 		return 0;  
 	}
 
@@ -304,7 +304,7 @@ int script_object_register_on_ubus(struct script_object *self, const char *name,
 
 	char obj_type_name[64]; 
 	
-	strncpy(obj_type_name, name + 1, sizeof(obj_type_name)); 
+	strncpy(obj_type_name, name, sizeof(obj_type_name)); 
 	for(size_t c = 0; c < strlen(name); c++) if(obj_type_name[c] == '/') obj_type_name[c] = '-'; 
 	
 	self->ubus_object->name = strdup(name); 
@@ -315,6 +315,7 @@ int script_object_register_on_ubus(struct script_object *self, const char *name,
 	if(ubus_add_object(ctx, self->ubus_object) != 0){
 		//free(self->ubus_object->name); 
 		//free(self->ubus_object->type->name); 
+		fprintf(stderr, "%s: error: could not add ubus object (%s)!\n", __FUNCTION__, name); 
 		self->ubus_object->name = self->ubus_object->type->name = 0; 
 		return -EIO; 
 	}
@@ -329,7 +330,7 @@ static int _load_ubus_plugins(struct app *self, const char *path, const char *ba
 	if(!base_path) base_path = path; 
 	DIR *dir = opendir(path); 
 	if(!dir){
-		fprintf(stderr, "could not open directory %s\n", path); 
+		fprintf(stderr, "%s: error: could not open directory %s\n", __FUNCTION__, path); 
 		return -ENOENT; 
 	}
 	printf("%s: reading %s\n", __FUNCTION__, path); 
@@ -347,14 +348,17 @@ static int _load_ubus_plugins(struct app *self, const char *path, const char *ba
 		} else  if(ent->d_type == DT_REG || ent->d_type == DT_LNK){
 			struct script_object *script = calloc(1, sizeof(struct script_object)); 
 			script_object_init(script); 
-			script_object_load(script, fname); 
+			if(script_object_load(script, fname) != 0){
+				fprintf(stderr, "%s: error loading script script %s!\n", __FUNCTION__, fname);
+				rv |= -EINVAL; 
+			}
 			const char *basename = fname + strlen(fname); 
 			for(; basename != fname; basename--){
 				if(*(basename - 1) == '/'){
 					break;
 				}
 			}
-			if(script_object_register_on_ubus(script, basename, self->ctx) != 0){ 
+			if(script_object_register_on_ubus(script, fname + strlen(base_path), self->ctx) != 0){ 
 				script_object_destroy(script); 
 				free(script); 
 				rv |= -EINVAL;
@@ -404,7 +408,7 @@ int main(int argc, char **argv){
 	}
 
 	if(app_load_scripts(&app, UBUS_ROOT) != 0){ 
-		printf("could not load ubus scripts\n"); 
+		printf("***** ERROR ******* could not load ubus scripts\n"); 
 		app_free(&app); 
 		return -1; 
 	}
