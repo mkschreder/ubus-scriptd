@@ -89,7 +89,7 @@ static int rpc_shell_script(struct ubus_context *ctx, struct ubus_object *obj,
 	char fname[255]; 
 
 	// all objects are preceded with slash so no need for slash in the path between root and objname
-	snprintf(fname, sizeof(fname), "%s%s", UBUS_ROOT, obj->name); 
+	snprintf(fname, sizeof(fname), "%s/%s", UBUS_ROOT, obj->name); 
 	
 	printf("%s: run %s\n", __FUNCTION__, fname); 
 	
@@ -357,7 +357,7 @@ void app_init(struct app *self){
 }
 
 int app_connect_to_ubus(struct app *self){
-	self->ctx = ubus_connect(NULL); 
+	self->ctx = ubus_connect("/var/ubus"); 
 	if(!self->ctx) {
 		perror("could not connect to ubus!\n"); 
 		return -EIO; 
