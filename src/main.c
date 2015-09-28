@@ -85,7 +85,6 @@ static int rpc_shell_script(struct ubus_context *ctx, struct ubus_object *obj,
 	blob_buf_init(&buf, 0);
 	
 	struct stat st; 
-	int exit_code = UBUS_STATUS_NO_DATA; 
 	char fname[255]; 
 
 	// all objects are preceded with slash so no need for slash in the path between root and objname
@@ -94,14 +93,16 @@ static int rpc_shell_script(struct ubus_context *ctx, struct ubus_object *obj,
 	printf("%s: run %s\n", __FUNCTION__, fname); 
 	
 	if(stat(fname, &st) == 0){
+		int exit_code = 0; 
 		const char *resp = run_command("%s %s '%s'", &exit_code, fname, method, blobmsg_format_json(msg, true)); 
-		if(!blobmsg_add_json_from_string(&buf, resp))
-			return UBUS_STATUS_NO_DATA; 
+		if(!blobmsg_add_json_from_string(&buf, resp)){
+			blobmsg_add_string(&buf, "error", "could not add json"); 
+			blobmsg_add_string(&buf, "json", resp); 
+			return ubus_send_reply(ctx, req, buf.head); 
+		}
 	}
 	
-	ubus_send_reply(ctx, req, buf.head);
-
-	return exit_code;
+	return ubus_send_reply(ctx, req, buf.head);
 }
 
 static struct ubus_method *parse_methods_json(const char *str, int *mcount){
