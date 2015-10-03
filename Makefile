@@ -2,7 +2,7 @@ BUILD_DIR=build_dir
 TARGET=ubus-scriptd
 SOURCE=src/main.c
 OBJECTS=$(patsubst %.c,%.o,$(SOURCE))
-CFLAGS+=-Wall -Werror -std=c99
+CFLAGS+=-g -Wall -Werror -std=c99
 
 all: $(BUILD_DIR) $(BUILD_DIR)/$(TARGET)
 
@@ -15,3 +15,6 @@ $(BUILD_DIR)/$(TARGET): $(addprefix $(BUILD_DIR)/,$(OBJECTS))
 $(BUILD_DIR)/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
+
+clean: 
+	rm -rf build_dir

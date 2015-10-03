@@ -30,6 +30,7 @@ static struct blob_buf buf;
 
 struct script_object {
 	struct ubus_object *ubus_object; 
+	struct ubus_method *ubus_methods; 
 	struct ubus_context *ubus_ctx; 
 	struct list_head list; 
 	uint8_t free_ubus_object; 
@@ -105,7 +106,7 @@ static int rpc_shell_script(struct ubus_context *ctx, struct ubus_object *obj,
 	return ubus_send_reply(ctx, req, buf.head);
 }
 
-static struct ubus_method *parse_methods_json(const char *str, int *mcount){
+static int _parse_methods_json(struct script_object *self, struct ubus_object *obj, const char *str){
 	struct blob_buf buf; 
 	
 	// BUG in blobbuf
@@ -116,112 +117,133 @@ static struct ubus_method *parse_methods_json(const char *str, int *mcount){
 	printf("parsing %s\n", str); 
 	if(!blobmsg_add_json_from_string(&buf, str)) {
 		printf("%s: warning: could not parse json!\n", __FUNCTION__); 
-		return 0;  
+		blob_buf_free(&buf); 
+		return -EINVAL;  
 	}
 
+	int memsize = 0, nmethods = 0, nparams = 0; 
 	struct blob_attr *attr = 0; 
-	struct blob_attr *head = blob_data(buf.head); 
-	int len = blob_len(buf.head); 
-	int nmethods = 0; 
-
-	__blob_for_each_attr(attr, head, len){
-		nmethods++; 
+	int l = blob_len(buf.head); 
+	__blob_for_each_attr(attr, blob_data(buf.head), l){
+		memsize += sizeof(struct ubus_method); 
+		memsize += strlen(blobmsg_name(attr)) + 1; // include last \0
+		nmethods ++; 
+		switch(blob_id(attr)){
+			case BLOBMSG_TYPE_TABLE: 
+			case BLOBMSG_TYPE_ARRAY: {
+				struct blob_attr *a = 0; 
+				int len = blobmsg_data_len(attr); 
+				__blob_for_each_attr(a, blobmsg_data(attr), len){
+					memsize += sizeof(struct blobmsg_policy); 
+					memsize += strlen(blobmsg_name(a)) + 1; // extra for name 
+					nparams ++; 
+				}
+			} break; 
+		}
 	}
-
-	printf("%s: allocating %d slots for methods\n", __FUNCTION__, nmethods); 
-
-	struct ubus_method *methods = calloc(nmethods, sizeof(struct ubus_method)); 
 	
-	nmethods = 0; 
-	head = blob_data(buf.head); 
-	len = blob_len(buf.head); 
+	char *memory = malloc(memsize); 
+	memset(memory, 0, memsize); 
+
+	printf("%s: allocating %d bytes for methods\n", __FUNCTION__, memsize); 
 	
-	__blob_for_each_attr(attr, head, len){
+	struct ubus_method *method = (struct ubus_method*)memory; 
+	self->ubus_methods = method; 
+	struct blobmsg_policy *policy = (struct blobmsg_policy*)(((char*)method) + sizeof(struct ubus_method) * nmethods); 
+	char *strings = (char*)(((char*)policy) + sizeof(struct blobmsg_policy) * nparams); 
+
+	obj->methods = method; 
+
+	l = blob_len(buf.head); 
+	__blob_for_each_attr(attr, blob_data(buf.head), l){
 		struct blobmsg_hdr *hdr = blob_data(attr); 
 		printf(" - found %s\n", hdr->name); 
 		switch(blob_id(attr)){
 			case BLOBMSG_TYPE_TABLE: 
 			case BLOBMSG_TYPE_ARRAY: {
+				method->policy = policy; 
+				
 				struct blob_attr *a = 0; 
-				int l = blobmsg_data_len(attr); 
-				int nparams = 0; 
-					
-				__blob_for_each_attr(a, blobmsg_data(attr), l){
-					nparams++; 
-				}
-					
-				struct blobmsg_policy *policy = calloc(nparams, sizeof(struct blobmsg_policy)); 
-
-				l = blob_len(attr); 
-				nparams = 0; 
-				__blob_for_each_attr(a, blobmsg_data(attr), l){
+				int len = blobmsg_data_len(attr); 
+				__blob_for_each_attr(a, blobmsg_data(attr), len){
 					if(blob_id(a) == BLOBMSG_TYPE_STRING){
 						const char *type_string = "string"; 
 						printf(" - blobattr: %s %s %s\n", blobmsg_name(attr), blobmsg_name(a), (char*)blobmsg_data(a)); 
+						const char *name = ""; 
 						if(strlen(blobmsg_name(a)) > 0){
-							policy[nparams].name = strdup(blobmsg_name(a)); 
+							name = blobmsg_name(a); 
 							type_string = blobmsg_data(a); 
 						} else {
-							policy[nparams].name = strdup(blobmsg_data(a));
+							name = blobmsg_data(a); 
 						}
+						
+						// store policy name after the policys array and increment the pointer
+						policy->name = strings; 
+						strcpy(strings, name); // this copy is not dangerous as long as we allocated memory above. 
+						strings += strlen(strings) + 1; 
+
 						if(strcmp(type_string, "string") == 0)
-							policy[nparams].type = BLOBMSG_TYPE_STRING; 
+							policy->type = BLOBMSG_TYPE_STRING; 
 						else if(strcmp(type_string, "bool") == 0)
-							policy[nparams].type = BLOBMSG_TYPE_INT8; 
+							policy->type = BLOBMSG_TYPE_INT8; 
 						else if(strcmp(type_string, "int") == 0 || strcmp(type_string, "int32") == 0)
-							policy[nparams].type = BLOBMSG_TYPE_INT32; 
+							policy->type = BLOBMSG_TYPE_INT32; 
 						else 
-							policy[nparams].type = BLOBMSG_TYPE_STRING; 
-						nparams++;
+							policy->type = BLOBMSG_TYPE_STRING; 
+						
+						policy++; 
+						method->n_policy++; 
 					} 
 				}
 				printf("%s: method %s with %d params\n", __FUNCTION__, hdr->name, nparams); 
-				methods[nmethods].name = strdup((char*)hdr->name); 
-				methods[nmethods].policy = policy; 
-				methods[nmethods].n_policy = nparams; 
-				methods[nmethods].handler = rpc_shell_script; 
-				nmethods++;
+				
+				strcpy(strings, (char*)hdr->name); 
+				method->name = strings; 
+				strings += strlen(strings) + 1; 
+				
+				method->handler = rpc_shell_script; 
+
+				method++;
+				obj->n_methods++; 
 			} break; 
 		}
 	}
 	blob_buf_free(&buf); 
-
-	*mcount = nmethods; 
-	return methods; 
+	return 0; 
 }
 
-static struct ubus_method* parse_methods_comma_list(const char *str, int *mcount){
-	char mstr[512]; 
-	strncpy(mstr, str, sizeof(mstr)); 
-	const char *mnames[64] = {0}; 
-	int nmethods = 1; 
-	mnames[0] = mstr; 
-	int len = strlen(mstr); 
-	for(int c = 0; c < len; c++) { 
-		if(mstr[c] == ',') {
-			mstr[c] = 0; 
-			mnames[nmethods] = mstr + c + 1; 
+static int _parse_methods_comma_list(struct script_object *self, struct ubus_object *obj, const char *str){
+	// calculate necessary memory and allocate chunk
+	int nmethods = 1, memsize = sizeof(struct ubus_method); 
+	for(const char *name = str; *name; name++){
+		if(*name == ','){
+			name++; 
+			memsize += sizeof(struct ubus_method); 
 			nmethods++; 
-			if(nmethods == sizeof(mnames)/sizeof(mnames[0]) - 1){
-				printf("Error: maximum number of methods!\n"); 
-				break; 
-			}
-		} else if(mstr[c] == '\n'){
-			break; 
 		}
 	}
+	// reserve space for method names. Note that commas will become string endings and we add one byte for last string ending. 
+	memsize += strlen(str) + 1; 
+
+	struct ubus_method *method = malloc(memsize); 
+	self->ubus_methods = method; 
+	memset(method, 0, sizeof(memsize)); 
+	char *strings = (char*)(method + nmethods); 
 	
-	struct ubus_method *methods = calloc(nmethods, sizeof(struct ubus_method));
+	obj->methods = method; 
 
-	for(size_t c = 0; c < nmethods; c++){
-		printf(" - registering %s\n", mnames[c]); 
-		methods[c].name = strdup(mnames[c]); 
-		methods[c].handler = rpc_shell_script;  
+	for(const char *name = str; *name; name++) { 
+		method->name = strings; 
+		while(*name && *name != ',') {
+			*strings++ = *name++; 
+		}
+		*strings++ = 0; 
+		printf(" - parsed method %s\n", method->name); 
+		method->handler = rpc_shell_script; 
+		method++; 
 	}
-
-	*mcount = nmethods; 
-
-	return methods; 
+	obj->n_methods = nmethods; 
+	return 0; 
 }
 
 void script_object_init(struct script_object *self){
@@ -231,15 +253,33 @@ void script_object_init(struct script_object *self){
 	self->ubus_ctx = 0; 
 }
 
-int script_object_load(struct script_object *self, const char *path){
-	struct ubus_method *methods = 0; 
-	int nmethods = 0;
+int script_object_load(struct script_object *self, const char *path){	
+	const char *objname = path + strlen(path); 
+	for(; objname != path; objname--){
+		if(*(objname - 1) == '/'){
+			break;
+		}
+	}
+	
+	int memsize = sizeof(struct ubus_object) + sizeof(struct ubus_object_type) + (strlen(objname) + 1) * 2;  
+	struct ubus_object *obj = malloc(memsize); 
+	memset(obj, 0, memsize); 
+	struct ubus_object_type *type = (struct ubus_object_type*)(((char*)obj) + sizeof(struct ubus_object)); 
+	char *strings = ((char*)type) + sizeof(struct ubus_object_type); 
+	
+	strcpy(strings, objname); 
+	obj->name = strings; strings += strlen(objname) + 1; 
+	strcpy(strings, objname); 
+	for(char *ch = strings; *ch; ch++) if(*ch == '/') *ch = '-'; 
+	type->name = strings; strings += strlen(objname) + 1; 
+		
 	if(strcmp(path + strlen(path) - 3, ".so") == 0){
 		// try to load the so and see if it is a valid plugin
 		void *dp = dlopen(path, RTLD_NOW); 
-		methods = dlsym(dp, "ubus_methods"); 
-		if(!methods){
+		obj->methods = dlsym(dp, "ubus_methods"); 
+		if(!obj->methods){
 			fprintf(stderr, "error: could not find ubus_methods symbol in %s\n", path); 
+			free(obj); 
 			return -EINVAL;  
 		}
 	} else {
@@ -247,77 +287,54 @@ int script_object_load(struct script_object *self, const char *path){
 		const char *mstr = run_command("%s .methods", &exit_code, path); 
 		
 		// extract methods into an array 
-		if(!(methods = parse_methods_json(mstr, &nmethods))){
+		if(_parse_methods_json(self, obj, mstr) != 0){
 			printf("%s: unable to parse json, tryging comma list...\n", __FUNCTION__); 
-			methods = parse_methods_comma_list(mstr, &nmethods); 
+			if(_parse_methods_comma_list(self, obj, mstr) != 0){
+				fprintf(stderr, "%s: unable to parse comma list.. bailing out!\n", __FUNCTION__); 
+				free(obj); 
+				return -EINVAL; 
+			}
 		}
 		
-		if(!methods) {
-			fprintf(stderr, "%s: error loading methods from %s\n", __FUNCTION__, path); 
-			return -EINVAL;  
-		}
-
-		printf(" - %d methods for %s\n", nmethods, path); 
+		printf(" - %d methods for %s\n", obj->n_methods, path); 
 	}
 	
-	struct ubus_object *obj = calloc(1, sizeof(struct ubus_object)); 
-	struct ubus_object_type *obj_type = calloc(1, sizeof(struct ubus_object_type)); 
-	
-	obj_type->name = 0; 
-	obj_type->id = 0; 
-	obj_type->n_methods = nmethods; 
-	obj_type->methods = methods;
-	
-	obj->name = 0;
-	obj->type = obj_type;
-	obj->methods = methods;
-	obj->n_methods = nmethods; 
+	if(!obj->methods) {
+		fprintf(stderr, "%s: unable to load ubus methods for %s\n", __FUNCTION__, obj->name); 
+		free(obj); 
+		return -EINVAL; 
+	}
+
+	type->id = 0; 
+	type->n_methods = obj->n_methods; 
+	type->methods = obj->methods;
+
+	obj->type = type;
 	
 	self->ubus_object = obj; 
-	self->free_ubus_object = 1; 
 
 	return 0; 
 }
 
 void script_object_destroy(struct script_object *self){
-	if(!self->free_ubus_object) return; 
-	struct ubus_object *obj = self->ubus_object;
-	if(self->ubus_ctx) ubus_remove_object(self->ubus_ctx, self->ubus_object); 	
-	if(obj->name) free((char*)obj->name); 
-	if(obj->type->name) free((char*)obj->type->name); 
-	/*if(obj->methods){
-		for(int c = 0; c < obj->n_methods; c++){
-			const struct ubus_method *m = &obj->methods[c];
-			if(m->name) free(m->name); 
-			for(int j = 0; j < m->n_policy; j++){
-				const struct ubus_policy *p = &m->policy[j]; 
-				if(p->name) free((char*)p->name);  
-			}
-			free(m->policy); 
-		}
-		free(obj->methods); 
-	}*/
-	free(self->ubus_object); 
+	if(self->ubus_object){
+		if(self->ubus_ctx) ubus_remove_object(self->ubus_ctx, self->ubus_object); 	
+		if(self->ubus_methods) free(self->ubus_methods); 
+		free(self->ubus_object); 
+		self->ubus_object = 0; 
+		self->ubus_methods = 0; 
+		self->ubus_ctx = 0; 
+	}
 }
 
 int script_object_register_on_ubus(struct script_object *self, const char *name, struct ubus_context *ctx){
 	if(!self->ubus_object) return -EINVAL;
+	if(self->ubus_ctx) return -EEXIST; 
 
-	char obj_type_name[64]; 
-	
-	strncpy(obj_type_name, name, sizeof(obj_type_name)); 
-	for(size_t c = 0; c < strlen(name); c++) if(obj_type_name[c] == '/') obj_type_name[c] = '-'; 
-	
-	self->ubus_object->name = strdup(name); 
-	self->ubus_object->type->name = strdup(obj_type_name); 
-
-	printf("Registering ubus object %s (%s)\n", name, obj_type_name); 
+	printf("Registering ubus object %s (%s)\n", self->ubus_object->name, self->ubus_object->type->name); 
 	
 	if(ubus_add_object(ctx, self->ubus_object) != 0){
-		//free(self->ubus_object->name); 
-		//free(self->ubus_object->type->name); 
 		fprintf(stderr, "%s: error: could not add ubus object (%s)!\n", __FUNCTION__, name); 
-		self->ubus_object->name = self->ubus_object->type->name = 0; 
 		return -EIO; 
 	}
 
@@ -364,8 +381,11 @@ static int _load_ubus_plugins(struct app *self, const char *path, const char *ba
 				free(script); 
 				rv |= -EINVAL;
 			}
+			script_object_destroy(script); 
+			free(script); 
 		}
 	}
+	closedir(dir); 
 	return rv; 
 }
 
@@ -395,7 +415,7 @@ void app_run(struct app *self){
 	uloop_run(); 
 }
 
-void app_free(struct app *self){
+void app_destroy(struct app *self){
 	ubus_free(self->ctx); 
 }
 
@@ -407,16 +427,18 @@ int main(int argc, char **argv){
 		printf("failed to connect to ubus!\n"); 
 		return -1; 
 	}
-
+	
+	while(1){
 	if(app_load_scripts(&app, UBUS_ROOT) != 0){ 
 		printf("***** ERROR ******* could not load ubus scripts\n"); 
-		app_free(&app); 
+		app_destroy(&app); 
 		return -1; 
 	}
-	
+	}
+
 	app_run(&app); 
 	
-	app_free(&app); 
+	app_destroy(&app); 
 
 	return 0; 
 }
