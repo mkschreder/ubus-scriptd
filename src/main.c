@@ -381,8 +381,6 @@ static int _load_ubus_plugins(struct app *self, const char *path, const char *ba
 				free(script); 
 				rv |= -EINVAL;
 			}
-			script_object_destroy(script); 
-			free(script); 
 		}
 	}
 	closedir(dir); 
@@ -428,12 +426,10 @@ int main(int argc, char **argv){
 		return -1; 
 	}
 	
-	while(1){
 	if(app_load_scripts(&app, UBUS_ROOT) != 0){ 
 		printf("***** ERROR ******* could not load ubus scripts\n"); 
 		app_destroy(&app); 
 		return -1; 
-	}
 	}
 
 	app_run(&app); 
