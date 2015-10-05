@@ -197,9 +197,9 @@ static int _parse_methods_comma_list(struct script_object *self, struct ubus_obj
 	memsize += strlen(str) + 1; 
 
 	struct ubus_method *method = malloc(memsize); 
+	memset(method, 0, memsize); 
 	self->ubus_methods = method; 
-	memset(method, 0, sizeof(memsize)); 
-	char *strings = (char*)(method + nmethods); 
+	char *strings = ((char*)method) + sizeof(struct ubus_method) * nmethods; 
 	
 	obj->methods = method; 
 
@@ -223,13 +223,13 @@ void script_object_init(struct script_object *self){
 	self->ubus_ctx = 0; 
 }
 
-int script_object_load(struct script_object *self, const char *path){	
-	const char *objname = path + strlen(path); 
+int script_object_load(struct script_object *self, const char *objname, const char *path){	
+	/*const char *objname = path + strlen(path); 
 	for(; objname != path; objname--){
 		if(*(objname - 1) == '/'){
 			break;
 		}
-	}
+	}*/
 	
 	int memsize = sizeof(struct ubus_object) + sizeof(struct ubus_object_type) + (strlen(objname) + 1) * 2;  
 	struct ubus_object *obj = malloc(memsize); 
@@ -238,10 +238,13 @@ int script_object_load(struct script_object *self, const char *path){
 	char *strings = ((char*)type) + sizeof(struct ubus_object_type); 
 	
 	strcpy(strings, objname); 
-	obj->name = strings; strings += strlen(objname) + 1; 
+	obj->name = strings; 
+	strings += strlen(objname) + 1; 
+	
 	strcpy(strings, objname); 
 	for(char *ch = strings; *ch; ch++) if(*ch == '/') *ch = '-'; 
-	type->name = strings; strings += strlen(objname) + 1; 
+	type->name = strings; 
+	strings += strlen(objname) + 1; 
 		
 	if(strcmp(path + strlen(path) - 3, ".so") == 0){
 		// try to load the so and see if it is a valid plugin
@@ -302,12 +305,12 @@ int script_object_register_on_ubus(struct script_object *self, struct ubus_conte
 	if(self->ubus_ctx) return -EEXIST; 
 
 	printf("Registering ubus object %s (%s)\n", self->ubus_object->name, self->ubus_object->type->name); 
-	
+
 	if(ubus_add_object(ctx, self->ubus_object) != 0){
 		fprintf(stderr, "%s: error: could not add ubus object (%s)!\n", __FUNCTION__, self->ubus_object->name); 
 		return -EIO; 
 	}
-
+	
 	self->ubus_ctx = ctx; 
 
 	return 0; 

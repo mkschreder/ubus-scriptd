@@ -11,7 +11,7 @@ struct script_object {
 }; 
 
 void script_object_init(struct script_object *self); 
-int script_object_load(struct script_object *self, const char *path); 
+int script_object_load(struct script_object *self, const char *objname, const char *path); 
 void script_object_destroy(struct script_object *self); 
 int script_object_register_on_ubus(struct script_object *self, struct ubus_context *ctx); 
 

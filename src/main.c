@@ -37,7 +37,7 @@ void on_ubus_connection_lost(struct ubus_context *ctx){
 	printf("ubus connection lost!\n"); 
 }
 
-static int _for_each_file(struct app *self, const char *path, const char *base_path, int (*on_file_cb)(struct app *self, const char *fname)){
+static int _for_each_file(struct app *self, const char *path, const char *base_path, int (*on_file_cb)(struct app *self, const char *fname, const char *base_path)){
 	int rv = 0; 
 	if(!base_path) base_path = path; 
 	DIR *dir = opendir(path); 
@@ -58,7 +58,7 @@ static int _for_each_file(struct app *self, const char *path, const char *base_p
 		if(ent->d_type == DT_DIR) {
 			rv |= _for_each_file(self, fname, base_path, on_file_cb);  
 		} else  if(ent->d_type == DT_REG || ent->d_type == DT_LNK){
-			rv |= on_file_cb(self, fname); 
+			rv |= on_file_cb(self, fname, base_path); 
 		}
 	}
 	closedir(dir); 
@@ -83,11 +83,12 @@ int app_connect_to_ubus(struct app *self, const char *path){
 	return 0; 
 }
 
-static int _load_script(struct app *self, const char *fname){ 	
+static int _load_script(struct app *self, const char *fname, const char *base_path){ 	
 	int rv = 0; 
 	struct script_object *script = calloc(1, sizeof(struct script_object)); 
-	script_object_init(script); 
-	if(script_object_load(script, fname) != 0){
+	script_object_init(script);
+	
+	if(script_object_load(script, fname + strlen(base_path), fname) != 0){
 		fprintf(stderr, "%s: error loading script script %s!\n", __FUNCTION__, fname);
 		rv |= -EINVAL; 
 	}
@@ -113,7 +114,7 @@ static void *_service_thread(void *pdata){
 	return 0; 	
 }
 
-static int _load_service(struct app *self, const char *fname){
+static int _load_service(struct app *self, const char *fname, const char *base_path){
 	// TODO: this is just a test. Make it pretty and non-leaky
 	pthread_t *thread = malloc(sizeof(pthread_t)); 
 	pthread_create(thread, 0, _service_thread, strdup(fname)); 
