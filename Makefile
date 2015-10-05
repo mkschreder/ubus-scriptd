@@ -10,7 +10,7 @@ $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
 $(BUILD_DIR)/$(TARGET): $(addprefix $(BUILD_DIR)/,$(OBJECTS)) 
-	$(CC) -o $@ $^ -lpthread -lubus -lubox -lblobmsg_json -ldl -llua5.1
+	$(CC) -o $@ $^ -lpthread -lubus -lubox -lblobmsg_json -ldl -llua
 
 $(BUILD_DIR)/%.o: %.c $(wildcard src/*.h)
 	@mkdir -p $(dir $@)
