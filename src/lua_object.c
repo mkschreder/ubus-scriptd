@@ -15,7 +15,7 @@ void lua_object_destroy(struct lua_object *self){
 }
 
 int lua_object_load(struct lua_object *self, const char *path){
-	int error = luaL_loadfile(self->lua, path) || lua_pcall(self->lua, 0, 0, 0); 
+	int error = luaL_dofile(self->lua, path); //luaL_loadfile(self->lua, path) || lua_pcall(self->lua, 0, 0, 0); 
 	if(error){
 		fprintf(stderr, "%s: error %s\n", __FUNCTION__, lua_tostring(self->lua, -1)); 
 		lua_pop(self->lua, 1); 

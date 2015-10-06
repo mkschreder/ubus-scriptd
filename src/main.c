@@ -110,14 +110,25 @@ static void *_service_thread(void *pdata){
 	printf("%s: loading lua service %s..\n", __FUNCTION__, fname); 
 	lua_object_init(obj); 
 	lua_object_load(obj, fname);
+	lua_object_destroy(obj); 
 	printf("%s: lua object done %s\n", __FUNCTION__, fname); 
 	return 0; 	
 }
 
 static int _load_service(struct app *self, const char *fname, const char *base_path){
-	// TODO: this is just a test. Make it pretty and non-leaky
-	pthread_t *thread = malloc(sizeof(pthread_t)); 
-	pthread_create(thread, 0, _service_thread, strdup(fname)); 
+	// fork here intead of using threads because neither ubus, nor uloop, nor lua like that we are using multiple threads. 
+	// (my theory is that lua does not work because uloop uses GLOBAL lua context and we start multiple uloops in lua scritps)
+	// normally we would want to have separate uloops per thread, but this is not possible with current libubox. 
+	// ... so .. we fork!
+	printf("%s: forking service %s\n", __FUNCTION__, fname); 
+	if(fork() == 0){
+		_service_thread(strdup(fname)); 
+		printf("%s: service exited\n", fname); 
+		exit(0); 
+	} 
+	//this is a test code. Implement proper memory management if used in production!
+	//pthread_t *thread = malloc(sizeof(pthread_t)); 
+	//pthread_create(thread, 0, _service_thread, strdup(fname)); 
 
 	return 0; 
 }
@@ -137,6 +148,13 @@ void app_destroy(struct app *self){
 
 int main(int argc, char **argv){
 	static struct app app; 
+	
+	// first thing is to fork off all services
+	if(app_load_services(&app, UBUS_SERVICE_ROOT) != 0){
+		fprintf(stderr, "***** ERROR ***** could not load services!\n"); 
+		app_destroy(&app); 
+		return -1; 
+	}
 
 	app_init(&app); 
 	if(app_connect_to_ubus(&app, NULL) != 0){
@@ -150,11 +168,7 @@ int main(int argc, char **argv){
 		return -1; 
 	}
 	
-	if(app_load_services(&app, UBUS_SERVICE_ROOT) != 0){
-		fprintf(stderr, "***** ERROR ***** could not load services!\n"); 
-		app_destroy(&app); 
-		return -1; 
-	}
+	
 
 	app_run(&app); 
 	
