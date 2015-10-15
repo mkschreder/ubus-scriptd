@@ -22,6 +22,7 @@
 #include <fcntl.h>
 #include <stdarg.h>
 #include <sys/stat.h>
+#include <sys/prctl.h>
 #include <pthread.h>
 
 #include "config.h"
@@ -122,6 +123,14 @@ static int _load_service(struct app *self, const char *fname, const char *base_p
 	// ... so .. we fork!
 	printf("%s: forking service %s\n", __FUNCTION__, fname); 
 	if(fork() == 0){
+		// first, use an ugly way to set the process name to the script we are going to run. However system will show only 16 chars at most. 
+		char newname[255]; 
+		const char *name_ptr = fname + strlen(fname); 
+		while(name_ptr != fname && *name_ptr != '/') name_ptr--;
+		if(*name_ptr == '/') name_ptr++; 
+		snprintf(newname, sizeof(newname), "%s", name_ptr); 
+		prctl(PR_SET_NAME, (long)newname); 
+
 		_service_thread(strdup(fname)); 
 		printf("%s: service exited\n", fname); 
 		exit(0); 
