@@ -2,7 +2,7 @@ BUILD_DIR=build_dir
 TARGET=ubus-scriptd
 SOURCE=src/main.c src/lua_object.c src/script_object.c
 OBJECTS=$(patsubst %.c,%.o,$(SOURCE))
-CFLAGS+=-Wall -Werror -std=c99 
+CFLAGS+=-Wall -Werror -std=gnu99 
 
 all: $(BUILD_DIR) $(BUILD_DIR)/$(TARGET)
 
