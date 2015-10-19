@@ -14,8 +14,7 @@
 
 struct blob_buf buf; 
 
-static const char*
-run_command(const char *pFmt, int *exit_code, ...)
+static const char* script_object_run_command(struct script_object *self, const char *pFmt, int *exit_code, ...)
 {
 	va_list ap;
 	char cmd[256] = {0};
@@ -25,22 +24,47 @@ run_command(const char *pFmt, int *exit_code, ...)
 	va_end(ap);
 
 	FILE *pipe = 0;
-	static char buffer[16384] = {0};
-	memset(buffer, 0, sizeof(buffer)); 
-	
+	char buffer[256]; 
+
+	if(!self->stdout_buf){
+		self->stdout_buf_size = sizeof(buffer); 
+		self->stdout_buf = malloc(self->stdout_buf_size);
+		memset(self->stdout_buf, 0, self->stdout_buf_size); 
+	}
+
 	if ((pipe = popen(cmd, "r"))){
-		char *ptr = buffer; 
-		while(fgets(ptr, sizeof(buffer) - (ptr - buffer), pipe)){
-			ptr+=strlen(ptr); 
-			//*ptr = '\0'; 
+		char *ptr = self->stdout_buf; 
+		while(fgets(buffer, sizeof(buffer), pipe)){
+			int len = strlen(buffer); 
+			int consumed = (ptr - self->stdout_buf); 
+			if((self->stdout_buf_size - consumed) < len) {
+				size_t size = self->stdout_buf_size * 2; // careful!
+				self->stdout_buf = realloc(self->stdout_buf, size);
+				if(!self->stdout_buf) {
+					fprintf(stderr, "Could not allocate buffer of size %u\n", (uint32_t)size); 
+					exit(-1); 
+				}
+				// zero the new space
+				memset(self->stdout_buf + self->stdout_buf_size, 0, size - self->stdout_buf_size); 
+				self->stdout_buf_size = size; 
+				// update ptr to point to new buffer 
+				ptr = self->stdout_buf + consumed;  
+			}
+			strcpy(ptr, buffer); 
+			ptr+=len; 
 		}
 		
 		*exit_code = WEXITSTATUS(pclose(pipe));
-
-		if(strcmp(buffer + strlen(buffer) - 1, "\n") == 0) buffer[strlen(buffer)-1] = 0; 
+	
+		// strip all new lines at the end of buffer
+		ptr--; 
+		while(ptr > self->stdout_buf && *ptr == '\n'){ 
+			*ptr = 0; 
+			ptr--; 
+		}
 		
-		if (ptr != buffer)
-			return (const char*)buffer;
+		if (ptr != self->stdout_buf)
+			return (const char*)self->stdout_buf;
 		else
 			return "{}";
 	} else {
@@ -53,6 +77,8 @@ static int rpc_shell_script(struct ubus_context *ctx, struct ubus_object *obj,
 		  struct ubus_request_data *req, const char *method,
 		  struct blob_attr *msg)
 {
+	struct script_object *self = container_of(obj, struct script_object, ubus_object); 
+
 	blob_buf_init(&buf, 0);
 	
 	struct stat st; 
@@ -65,7 +91,7 @@ static int rpc_shell_script(struct ubus_context *ctx, struct ubus_object *obj,
 	
 	if(stat(fname, &st) == 0){
 		int exit_code = 0; 
-		const char *resp = run_command("%s %s '%s'", &exit_code, fname, method, blobmsg_format_json(msg, true)); 
+		const char *resp = script_object_run_command(self, "%s %s '%s'", &exit_code, fname, method, blobmsg_format_json(msg, true)); 
 		if(!blobmsg_add_json_from_string(&buf, resp)){
 			blobmsg_add_string(&buf, "error", "could not add json"); 
 			blobmsg_add_string(&buf, "json", resp); 
@@ -219,8 +245,11 @@ static int _parse_methods_comma_list(struct script_object *self, struct ubus_obj
 
 void script_object_init(struct script_object *self){
 	INIT_LIST_HEAD(&self->list); 
-	self->ubus_object = 0; 
+	memset(&self->ubus_object, 0, sizeof(struct ubus_object));  
+	self->ubus_object_mem = 0; 
 	self->ubus_ctx = 0; 
+	self->stdout_buf = 0; 
+	self->stdout_buf_size = 0; 
 }
 
 int script_object_load(struct script_object *self, const char *objname, const char *path){	
@@ -257,7 +286,7 @@ int script_object_load(struct script_object *self, const char *objname, const ch
 		}
 	} else {
 		int exit_code = 0; 
-		const char *mstr = run_command("%s .methods", &exit_code, path); 
+		const char *mstr = script_object_run_command(self, "%s .methods", &exit_code, path); 
 		
 		// extract methods into an array 
 		if(_parse_methods_json(self, obj, mstr) != 0){
@@ -284,30 +313,34 @@ int script_object_load(struct script_object *self, const char *objname, const ch
 
 	obj->type = type;
 	
-	self->ubus_object = obj; 
+	self->ubus_object_mem = obj; 
+	memcpy(&self->ubus_object, obj, sizeof(struct ubus_object)); 
 
 	return 0; 
 }
 
 void script_object_destroy(struct script_object *self){
-	if(self->ubus_object){
-		if(self->ubus_ctx) ubus_remove_object(self->ubus_ctx, self->ubus_object); 	
+	if(self->ubus_object_mem){
+		if(self->ubus_ctx) ubus_remove_object(self->ubus_ctx, &self->ubus_object); 	
 		if(self->ubus_methods) free(self->ubus_methods); 
-		free(self->ubus_object); 
-		self->ubus_object = 0; 
+		if(self->ubus_object_mem) free(self->ubus_object_mem); 
+		if(self->stdout_buf) free(self->stdout_buf); 
+		self->stdout_buf = 0; 
+		self->stdout_buf_size = 0; 
+		self->ubus_object_mem = 0; 
 		self->ubus_methods = 0; 
 		self->ubus_ctx = 0; 
 	}
 }
 
 int script_object_register_on_ubus(struct script_object *self, struct ubus_context *ctx){
-	if(!self->ubus_object) return -EINVAL;
+	if(!self->ubus_object_mem) return -EINVAL;
 	if(self->ubus_ctx) return -EEXIST; 
 
-	printf("Registering ubus object %s (%s)\n", self->ubus_object->name, self->ubus_object->type->name); 
+	printf("Registering ubus object %s (%s)\n", self->ubus_object.name, self->ubus_object.type->name); 
 
-	if(ubus_add_object(ctx, self->ubus_object) != 0){
-		fprintf(stderr, "%s: error: could not add ubus object (%s)!\n", __FUNCTION__, self->ubus_object->name); 
+	if(ubus_add_object(ctx, &self->ubus_object) != 0){
+		fprintf(stderr, "%s: error: could not add ubus object (%s)!\n", __FUNCTION__, self->ubus_object.name); 
 		return -EIO; 
 	}
 	
