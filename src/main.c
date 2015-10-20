@@ -160,9 +160,9 @@ int main(int argc, char **argv){
 	
 	// first thing is to fork off all services
 	if(app_load_services(&app, UBUS_SERVICE_ROOT) != 0){
-		fprintf(stderr, "***** ERROR ***** could not load services!\n"); 
-		app_destroy(&app); 
-		return -1; 
+		fprintf(stderr, "***** ERROR ***** there were errors while loading lua services!\n"); 
+		//app_destroy(&app); 
+		//return -1; 
 	}
 
 	app_init(&app); 
@@ -172,12 +172,11 @@ int main(int argc, char **argv){
 	}
 	
 	if(app_load_scripts(&app, UBUS_ROOT) != 0){ 
-		printf("***** ERROR ******* could not load ubus scripts\n"); 
-		app_destroy(&app); 
-		return -1; 
+		fprintf(stderr, "***** ERROR ******* there were errors while loading ubus scripts\n"); 
+		fprintf(stderr, "***** some ubus rpc call may not be available!\n"); 
+		//app_destroy(&app); 
+		//return -1; 
 	}
-	
-	
 
 	app_run(&app); 
 	

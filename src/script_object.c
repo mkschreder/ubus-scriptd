@@ -210,6 +210,8 @@ static int _parse_methods_json(struct script_object *self, struct ubus_object *o
 }
 
 static int _parse_methods_comma_list(struct script_object *self, struct ubus_object *obj, const char *str){
+	if(strlen(str) == 0) return -EINVAL; 
+
 	// calculate necessary memory and allocate chunk
 	int nmethods = 1, memsize = sizeof(struct ubus_method); 
 	for(const char *name = str; *name; name++){
