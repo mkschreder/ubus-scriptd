@@ -17,10 +17,19 @@ struct blob_buf buf;
 static const char* script_object_run_command(struct script_object *self, const char *pFmt, int *exit_code, ...)
 {
 	va_list ap;
-	char cmd[256] = {0};
-		
-	va_start(ap, exit_code);
+	char cmd[16384];
+	//size_t cmd_size = 0; 		
+
+	// calculate size of the resulting buffer first
+	va_start(ap, exit_code); 
+	
+	// did not work. No support for this c99 feature in uClibc? 
+	//cmd_size = vsnprintf(NULL, 0, pFmt, ap); 
+	//cmd = malloc(cmd_size+1); 
+	//memset(cmd, 0, cmd_size+1); 
+
 	vsnprintf(cmd, sizeof(cmd), pFmt, ap);
+
 	va_end(ap);
 
 	FILE *pipe = 0;
@@ -32,7 +41,7 @@ static const char* script_object_run_command(struct script_object *self, const c
 		memset(self->stdout_buf, 0, self->stdout_buf_size); 
 	}
 
-	if ((pipe = popen(cmd, "r"))){
+	if ((pipe = popen(cmd, "r"))){ 
 		char *ptr = self->stdout_buf; 
 		while(fgets(buffer, sizeof(buffer), pipe)){
 			int len = strlen(buffer); 
@@ -53,9 +62,11 @@ static const char* script_object_run_command(struct script_object *self, const c
 			strcpy(ptr, buffer); 
 			ptr+=len; 
 		}
-		
+
 		*exit_code = WEXITSTATUS(pclose(pipe));
 	
+		//free(cmd); 
+		
 		// strip all new lines at the end of buffer
 		ptr--; 
 		while(ptr > self->stdout_buf && *ptr == '\n'){ 
@@ -68,6 +79,7 @@ static const char* script_object_run_command(struct script_object *self, const c
 		else
 			return "{}";
 	} else {
+		//free(cmd); 
 		return "{}"; 
 	}
 }
