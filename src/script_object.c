@@ -14,24 +14,7 @@
 
 struct blob_buf buf; 
 
-static const char* script_object_run_command(struct script_object *self, const char *pFmt, int *exit_code, ...)
-{
-	va_list ap;
-	char cmd[16384];
-	//size_t cmd_size = 0; 		
-
-	// calculate size of the resulting buffer first
-	va_start(ap, exit_code); 
-	
-	// did not work. No support for this c99 feature in uClibc? 
-	//cmd_size = vsnprintf(NULL, 0, pFmt, ap); 
-	//cmd = malloc(cmd_size+1); 
-	//memset(cmd, 0, cmd_size+1); 
-
-	vsnprintf(cmd, sizeof(cmd), pFmt, ap);
-
-	va_end(ap);
-
+static const char* script_object_run_command(struct script_object *self, const char *cmd, int *exit_code){
 	FILE *pipe = 0;
 	char buffer[256]; 
 
@@ -65,8 +48,6 @@ static const char* script_object_run_command(struct script_object *self, const c
 
 		*exit_code = WEXITSTATUS(pclose(pipe));
 	
-		//free(cmd); 
-		
 		// strip all new lines at the end of buffer
 		ptr--; 
 		while(ptr > self->stdout_buf && *ptr == '\n'){ 
@@ -79,7 +60,6 @@ static const char* script_object_run_command(struct script_object *self, const c
 		else
 			return "{}";
 	} else {
-		//free(cmd); 
 		return "{}"; 
 	}
 }
@@ -103,7 +83,15 @@ static int rpc_shell_script(struct ubus_context *ctx, struct ubus_object *obj,
 	
 	if(stat(fname, &st) == 0){
 		int exit_code = 0; 
-		const char *resp = script_object_run_command(self, "%s %s '%s'", &exit_code, fname, method, blobmsg_format_json(msg, true)); 
+		const char *fmt = "%s %s '%s'"; 
+		char *json = blobmsg_format_json(msg, true); 
+		size_t len = strlen(fname) + strlen(method) + strlen(json) + strlen(fmt); 
+		char *command = malloc(len); 
+		snprintf(command, len, fmt, fname, method, json);  
+		const char *resp = script_object_run_command(self, command, &exit_code ); 
+		free(command); 
+		free(json); 
+
 		if(!blobmsg_add_json_from_string(&buf, resp)){
 			blobmsg_add_string(&buf, "error", "could not add json"); 
 			blobmsg_add_string(&buf, "json", resp); 
@@ -300,7 +288,9 @@ int script_object_load(struct script_object *self, const char *objname, const ch
 		}
 	} else {
 		int exit_code = 0; 
-		const char *mstr = script_object_run_command(self, "%s .methods", &exit_code, path); 
+		char cmd[255]; 
+		snprintf(cmd, 255, "%s .methods", path); 
+		const char *mstr = script_object_run_command(self, cmd, &exit_code); 
 		
 		// extract methods into an array 
 		if(_parse_methods_json(self, obj, mstr) != 0){
