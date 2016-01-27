@@ -29,13 +29,15 @@
 #include "script_object.h"
 #include "lua_object.h"
 
+#define DEBUG(...) {}
+
 struct app {
 	struct ubus_context *ctx; 
 	struct list_head scripts;  
 }; 
 
 void on_ubus_connection_lost(struct ubus_context *ctx){
-	printf("ubus connection lost!\n"); 
+	DEBUG("ubus connection lost!\n"); 
 }
 
 static int _for_each_file(struct app *self, const char *path, const char *base_path, int (*on_file_cb)(struct app *self, const char *fname, const char *base_path)){
@@ -46,7 +48,7 @@ static int _for_each_file(struct app *self, const char *path, const char *base_p
 		fprintf(stderr, "%s: error: could not open directory %s\n", __FUNCTION__, path); 
 		return -ENOENT; 
 	}
-	printf("%s: reading %s\n", __FUNCTION__, path); 
+	DEBUG("%s: reading %s\n", __FUNCTION__, path); 
 	struct dirent *ent = 0; 
 	char fname[255]; 
 	while((ent = readdir(dir))){
@@ -54,7 +56,7 @@ static int _for_each_file(struct app *self, const char *path, const char *base_p
 
 		snprintf(fname, sizeof(fname), "%s/%s", path, ent->d_name); 
 		
-		printf("%s: found %s, type: %d\n", __FUNCTION__, fname, ent->d_type); 
+		DEBUG("%s: found %s, type: %d\n", __FUNCTION__, fname, ent->d_type); 
 		
 		if(ent->d_type == DT_DIR) {
 			rv |= _for_each_file(self, fname, base_path, on_file_cb);  
@@ -78,7 +80,7 @@ int app_connect_to_ubus(struct app *self, const char *path){
 		return -EIO; 
 	}
 
-	printf("connected as %x\n", self->ctx->local_id); 
+	DEBUG("connected as %x\n", self->ctx->local_id); 
 	
 	self->ctx->connection_lost = on_ubus_connection_lost; 	
 	return 0; 
@@ -108,11 +110,11 @@ int app_load_scripts(struct app *self, const char *root){
 static void *_service_thread(void *pdata){
 	const char *fname = (const char *)pdata; 
 	struct lua_object *obj = calloc(1, sizeof(struct lua_object)); 
-	printf("%s: loading lua service %s..\n", __FUNCTION__, fname); 
+	DEBUG("%s: loading lua service %s..\n", __FUNCTION__, fname); 
 	lua_object_init(obj); 
 	lua_object_load(obj, fname);
 	lua_object_destroy(obj); 
-	printf("%s: lua object done %s\n", __FUNCTION__, fname); 
+	DEBUG("%s: lua object done %s\n", __FUNCTION__, fname); 
 	return 0; 	
 }
 
@@ -121,7 +123,7 @@ static int _load_service(struct app *self, const char *fname, const char *base_p
 	// (my theory is that lua does not work because uloop uses GLOBAL lua context and we start multiple uloops in lua scritps)
 	// normally we would want to have separate uloops per thread, but this is not possible with current libubox. 
 	// ... so .. we fork!
-	printf("%s: forking service %s\n", __FUNCTION__, fname); 
+	DEBUG("%s: forking service %s\n", __FUNCTION__, fname); 
 	if(fork() == 0){
 		// first, use an ugly way to set the process name to the script we are going to run. However system will show only 16 chars at most. 
 		char newname[255]; 
@@ -132,7 +134,7 @@ static int _load_service(struct app *self, const char *fname, const char *base_p
 		prctl(PR_SET_NAME, (long)newname); 
 
 		_service_thread(strdup(fname)); 
-		printf("%s: service exited\n", fname); 
+		DEBUG("%s: service exited\n", fname); 
 		exit(0); 
 	} 
 	//this is a test code. Implement proper memory management if used in production!
@@ -167,7 +169,7 @@ int main(int argc, char **argv){
 
 	app_init(&app); 
 	if(app_connect_to_ubus(&app, NULL) != 0){
-		printf("failed to connect to ubus!\n"); 
+		DEBUG("failed to connect to ubus!\n"); 
 		return -1; 
 	}
 	

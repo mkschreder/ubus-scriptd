@@ -1,4 +1,4 @@
-#define _XOPEN_SOURCE
+#printidefine _XOPEN_SOURCE
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -79,7 +79,7 @@ static int rpc_shell_script(struct ubus_context *ctx, struct ubus_object *obj,
 	// all objects are preceded with slash so no need for slash in the path between root and objname
 	snprintf(fname, sizeof(fname), "%s/%s", UBUS_ROOT, obj->name); 
 	
-	printf("%s: run %s\n", __FUNCTION__, fname); 
+	//printf("%s: run %s\n", __FUNCTION__, fname); 
 	
 	if(stat(fname, &st) == 0){
 		int exit_code = 0; 
